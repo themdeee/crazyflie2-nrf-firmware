@@ -265,27 +265,32 @@ void mainloop()
       }
       else
       {
-        if (p2p == false) {
-          memcpy(slTxPacket.data, packet->data, packet->size);
-          slTxPacket.length = packet->size;
-          if (broadcast) {
-            slTxPacket.type = SYSLINK_RADIO_RAW_BROADCAST;
+        // Radio packet, send it to STM32 over syslink.
+        // Do it first when the STM is ready to receive it.
+        if  (radioReadyCommandReceived)
+        {
+          if (p2p == false) {
+            memcpy(slTxPacket.data, packet->data, packet->size);
+            slTxPacket.length = packet->size;
+            if (broadcast) {
+              slTxPacket.type = SYSLINK_RADIO_RAW_BROADCAST;
+            } else {
+              slTxPacket.type = SYSLINK_RADIO_RAW;
+            }
           } else {
-            slTxPacket.type = SYSLINK_RADIO_RAW;
+            // The first byte sent is the P2P port
+            slTxPacket.data[0] = packet->data[1] & 0x0F;
+            slTxPacket.data[1] = packet->rssi; // Save RSSI between drones in packet
+            memcpy(&slTxPacket.data[2], &packet->data[2], packet->size-2);
+            slTxPacket.length = packet->size;
+            if (broadcast) {
+              slTxPacket.type = SYSLINK_RADIO_P2P_BROADCAST;
+            } else {
+              slTxPacket.type = SYSLINK_RADIO_P2P;
+            }
           }
-        } else {
-          // The first byte sent is the P2P port
-          slTxPacket.data[0] = packet->data[1] & 0x0F;
-          slTxPacket.data[1] = packet->rssi; // Save RSSI between drones in packet
-          memcpy(&slTxPacket.data[2], &packet->data[2], packet->size-2);
-          slTxPacket.length = packet->size;
-          if (broadcast) {
-            slTxPacket.type = SYSLINK_RADIO_P2P_BROADCAST;
-          } else {
-            slTxPacket.type = SYSLINK_RADIO_P2P;
-          }
+          syslinkSend(&slTxPacket);
         }
-        syslinkSend(&slTxPacket);
       }
     }
 
@@ -654,9 +659,9 @@ static void handleBootloaderCmd(struct esbPacket_s *packet)
       break;
     case BOOTLOADER_CMD_SYSON:
       pmSysBootloader(false);
-      pmSetState(pmSysRunning);
       syslinkReset();
-
+      radioReadyCommandReceived = false;
+      pmSetState(pmSysRunning);
       break;
     case BOOTLOADER_CMD_GETVBAT:
       if (esbCanTxPacket()) {
