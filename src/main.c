@@ -103,6 +103,7 @@ static bool debugProbeReceivedAddress = false;
 static bool debugProbeReceivedRate = false;
 
 static bool radioReadyCommandReceived = false;
+static uint32_t sysonTime = 0;
 
 int main()
 {
@@ -212,7 +213,8 @@ void mainloop()
       }
 
       // Check if we should open the gate
-      if (radioReadyCommandReceived || (systickGetTick() >= startupTime + 3000)) {
+      if (radioReadyCommandReceived || 
+           (systickGetTick() >= startupTime + SYSLINK_RADIO_DISABLED_TIMEOUT_MS)) {
         esbAllowStart();
         radioStartupGateHandled = true;
       }
@@ -267,7 +269,8 @@ void mainloop()
       {
         // Radio packet, send it to STM32 over syslink.
         // Do it first when the STM is ready to receive it.
-        if  (radioReadyCommandReceived)
+        if  (radioReadyCommandReceived || 
+              (systickGetTick() >= sysonTime + SYSLINK_RADIO_DISABLED_TIMEOUT_MS))
         {
           if (p2p == false) {
             memcpy(slTxPacket.data, packet->data, packet->size);
@@ -661,6 +664,7 @@ static void handleBootloaderCmd(struct esbPacket_s *packet)
       pmSysBootloader(false);
       syslinkReset();
       radioReadyCommandReceived = false;
+      sysonTime = systickGetTick();
       pmSetState(pmSysRunning);
       break;
     case BOOTLOADER_CMD_GETVBAT:
