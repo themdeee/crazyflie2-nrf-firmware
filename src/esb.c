@@ -35,9 +35,7 @@
 
 //#define RSSI_VBAT_ACK_PACKET
 
-#ifdef RSSI_VBAT_ACK_PACKET
-  #include "pm.h"
-#endif
+#include "pm.h"
 
 #define RXQ_LEN 8
 #define TXQ_LEN 8
@@ -212,6 +210,35 @@ void esbInterruptHandler()
       pk->crc = NRF_RADIO->RXCRC;
       pk->match = NRF_RADIO->RXMATCH;
 
+      // The following handlers respond directly in the interrupt and do
+      // not need a slot in the RX queue. They must be checked before the
+      // queue-full guard so that they remain reachable even when the
+      // queue is full.
+
+      // Answer battery voltage query directly in the ACK via servicePacket
+      if (pk->match == ESB_UNICAST_ADDRESS_MATCH &&
+          pk->size >= 3 && (pk->data[0] & 0xf3) == 0xf3 &&
+          pk->data[1] == 0xfe && pk->data[2] == 0x04) {
+        memcpy(servicePacket.data, pmGetVbatPacket(), pmGetVbatPacketSize());
+        servicePacket.size = pmGetVbatPacketSize();
+        setupTx(false, false);
+        return;
+      }
+
+      // Match safeLink packet and answer it
+      if (pk->match == ESB_UNICAST_ADDRESS_MATCH &&
+          pk->size == 3 && (pk->data[0]&0xf3) == 0xf3 && pk->data[1] == 0x05) {
+        has_safelink = pk->data[2];
+        memcpy(servicePacket.data, pk->data, 3);
+        servicePacket.size = 3;
+        setupTx(false, false);
+
+        // Reset packet counters
+        curr_down = 1;
+        curr_up = 1;
+        return;
+      }
+
       // If no more space available on RX queue, drop packet!
       if (((rxq_head+1)%RXQ_LEN) == rxq_tail) {
         NRF_RADIO->TASKS_START = 1UL;
@@ -240,18 +267,25 @@ void esbInterruptHandler()
         return;
       }
 
+      // Ack Radio command packets right away with empty ack
+      if (pk->match == ESB_UNICAST_ADDRESS_MATCH &&
+          pk->size >= 4 && (pk->data[0] & 0xf3) == 0xf3 && pk->data[1] == 0x03) {
+        setupTx(false, true);
+
+        // Push the queue head to push this packet and prepare the next
+        // The main loop will handle the radio command
+        rxq_head = ((rxq_head+1)%RXQ_LEN);
+        return;
+      }
+
       if ((pk->match == ESB_UNICAST_ADDRESS_MATCH))
       {
-        // Match safeLink packet and answer it
-        if (pk->size == 3 && (pk->data[0]&0xf3) == 0xf3 && pk->data[1] == 0x05) {
-          has_safelink = pk->data[2];
-          memcpy(servicePacket.data, pk->data, 3);
-          servicePacket.size = 3;
-          setupTx(false, false);
-
-          // Reset packet counters
-          curr_down = 1;
-          curr_up = 1;
+        // Drop unhandled null CRTP platform packets directly in the
+        // interrupt. These are never forwarded to the main loop or the
+        // STM32. An empty ACK is sent back so that no connection data
+        // from the TX queue is leaked.
+        if (pk->size >= 2 && (pk->data[0] & 0xf3) == 0xf3) {
+          setupTx(false, true);
           return;
         }
 
